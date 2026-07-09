@@ -166,6 +166,21 @@ typedef struct FermionicTerm
         }
         coeff *= prefactor;
     }
+    /**
+     * Operator product of two terms: (this) followed by (other).
+     *
+     * @param[in] other The right-hand term.
+     * @return The product term, normal-ordered.
+     */
+    FermionicTerm multiply(const FermionicTerm& other) const
+    {
+        FermionicTerm out = FermionicTerm(this->coeff * other.coeff);
+        out.data.reserve(this->data.size() + other.data.size());
+        out.data.assign(this->data.begin(), this->data.end());
+        out.data.insert(out.data.end(), other.data.begin(), other.data.end());
+        out.insertion_sort();
+        return out;
+    }
 } FermionicTerm_t;
 
 /**

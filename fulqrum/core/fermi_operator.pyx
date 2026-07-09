@@ -200,6 +200,31 @@ cdef class FermionicOperator():
             out.oper.terms[kk].coeff *= other
         return out
 
+    def multiply(self, FermionicOperator other):
+        """Operator product of two FermionicOperators.
+
+        Computes ``self * other`` as a fermionic operator. The resulting
+        operator may have repeated indices or terms. A subsequent
+        JW transform or explicit ``combine_repeat_indices`` /
+        ``combine_repeated_terms`` call can combine them.
+
+        Parameters:
+            other (FermionicOperator): The right-hand operator. Must have the
+                same width as ``self``.
+
+        Returns:
+            FermionicOperator: The product ``self * other``.
+        """
+        if self.oper.width != other.oper.width:
+            raise FulqrumError("Operators must have the same width")
+        cdef FermionicOperator out = FermionicOperator(self.oper.width)
+        out.oper = self.oper.multiply(other.oper)
+        return out
+
+    def __matmul__(self, FermionicOperator other):
+        """Operator product ``self @ other`` (see :meth:`multiply`)."""
+        return self.multiply(other)
+
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def __getitem__(self, key):
