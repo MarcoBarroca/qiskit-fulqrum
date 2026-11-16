@@ -66,10 +66,59 @@ __global__ void __launch_bounds__(kDiagonalThreads) diagonal_kernel(const FqTile
     }
 }
 
+// y = x / (d - shift) for elements offset .. offset + count of the local tile,
+// with d from diagonal_element (stored or recomputed). The clamp keeps |d - shift|
+// at least 1e-10, as the stored-diagonal Jacobi preconditioner does.
+__global__ void __launch_bounds__(kDiagonalThreads)
+    diagonal_shifted_inverse_kernel(const FqTileGeometry geometry,
+                                    const FqDiagonalTables tables,
+                                    const double* x,
+                                    double* y,
+                                    const std::int64_t offset,
+                                    const std::int64_t count,
+                                    const double shift)
+{
+    const std::int64_t stride = std::int64_t(gridDim.x) * blockDim.x;
+    for(std::int64_t i = fq::device::thread_column(); i < count; i += stride)
+    {
+        const std::int64_t j = offset + i;
+        const int a = int(j % geometry.n_a_bra);
+        const int b = int(j / geometry.n_a_bra);
+        const double t = diagonal_element(geometry, tables, a, b) - shift;
+        double m = fabs(t);
+        m = (m != m || m > 1e-10) ? m : 1e-10;
+        y[i] = x[i] / copysign(m, t);
+    }
+}
+
 } // namespace
 
 extern "C"
 {
+
+    int fq_launch_diagonal_shifted_inverse(const FqTileGeometry* geometry,
+                                           const FqDiagonalTables* tables,
+                                           const double* x,
+                                           double* y,
+                                           long long offset,
+                                           long long count,
+                                           double shift,
+                                           void* stream)
+    {
+        if(count <= 0)
+        {
+            return int(cudaSuccess);
+        }
+        const std::int64_t blocks = (count + kDiagonalThreads - 1) / kDiagonalThreads;
+        const unsigned int grid =
+            static_cast<unsigned int>(blocks < kMaxDiagonalBlocks ? blocks : kMaxDiagonalBlocks);
+        diagonal_shifted_inverse_kernel<<<grid,
+                                          kDiagonalThreads,
+                                          0,
+                                          static_cast<cudaStream_t>(stream)>>>(
+            *geometry, *tables, x, y, offset, count, shift);
+        return int(cudaGetLastError());
+    }
 
     int fq_launch_diagonal(const FqTileGeometry* geometry,
                            const FqVectors* vectors,

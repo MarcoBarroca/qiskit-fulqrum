@@ -597,7 +597,7 @@ FLAGS = (
         None,
         "GPU memory excluded from the automatically computed managed-basis budget, in GiB.",
         minimum=0.0,
-        default_text="4 GiB plus three local float64 vectors",
+        default_text="4 GiB after the warm-up matvec of the GPU eigensolver; otherwise 4 GiB plus three local float64 vectors",
     ),
     _flag(
         "FQ_PRIMME_GPU_DENSE",

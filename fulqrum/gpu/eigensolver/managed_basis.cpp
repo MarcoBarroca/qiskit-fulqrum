@@ -34,6 +34,7 @@ struct Record
 
 Record g_records[kMaxRecords] = {};
 long long g_budget = -1;
+double g_reserve_gib = -1.0;
 
 bool log_enabled()
 {
@@ -168,7 +169,10 @@ fq_primme_gpu_basis_malloc(void** x, size_t bytes, long long nLocal, int maxBasi
             return 1;
         }
         const double vec_gb = static_cast<double>(nLocal) * sizeof(double) / (1ULL << 30);
-        const double reserve = env_gb("FQ_PRIMME_HBM_RESERVE_GB", 4.0 + 3.0 * vec_gb);
+        // Without a warm-up matvec, the operator still allocates buffers in the
+        // first matvec: keep room for them.
+        const double fallback = g_reserve_gib >= 0.0 ? g_reserve_gib : 4.0 + 3.0 * vec_gb;
+        const double reserve = env_gb("FQ_PRIMME_HBM_RESERVE_GB", fallback);
         const double budget = env_gb("FQ_PRIMME_HBM_BUDGET_GB", -1.0);
         long long b = budget >= 0.0 ? static_cast<long long>(budget * (1ULL << 30))
                                     : static_cast<long long>(free_b) -
@@ -279,4 +283,20 @@ extern "C" void fq_primme_gpu_basis_free(void* x)
             return;
         }
     }
+}
+
+// Sets the default HBM reserve of the managed basis to `gib` GiB.
+// Call it after a warm-up matvec as free HBM estimate after th warm-up
+// matvec is closer to the steady-state matvec value.
+extern "C" void fq_primme_gpu_basis_set_reserve(double gib)
+{
+    g_reserve_gib = gib;
+    for(int i = 0; i < kMaxRecords; i++)
+    {
+        if(g_records[i].ptr)
+        {
+            return;
+        }
+    }
+    g_budget = -1;
 }

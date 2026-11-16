@@ -172,6 +172,12 @@ cdef extern from *:
     static void fq_primme_spec_stats_(long long *counts, double *seconds)
     { int i; for (i = 0; i < 5; i++) counts[i] = 0; for (i = 0; i < 3; i++) seconds[i] = 0.0; }
     #endif
+    #ifdef FQ_PRIMME_GPU
+    extern "C" void fq_primme_gpu_basis_set_reserve(double gib);
+    static void fq_primme_gpu_basis_set_reserve_(double gib) { fq_primme_gpu_basis_set_reserve(gib); }
+    #else
+    static void fq_primme_gpu_basis_set_reserve_(double gib) { (void)gib; }
+    #endif
     """
     ctypedef int (*fq_matvec_start_fn)(double *, double *, primme_params *) noexcept
     ctypedef int (*fq_matvec_input_done_fn)(primme_params *) noexcept
@@ -190,6 +196,7 @@ cdef extern from *:
     long long fq_primme_spec_chunk_rows_() nogil
     int fq_primme_spec_wait_rows_(long long rows) nogil
     void fq_primme_spec_wait_output_free_() nogil
+    void fq_primme_gpu_basis_set_reserve_(double gib)
 
 
 cdef enum:
@@ -502,6 +509,16 @@ def spec_wait_output_free():
 
     with nogil:
         fq_primme_spec_wait_output_free_()
+
+
+def managed_basis_set_reserve(double gib):
+    """Set the default device-memory reserve of the managed GPU basis, in GiB.
+
+    For use after a warm-up matvec; ``FQ_PRIMME_HBM_RESERVE_GB`` still takes
+    precedence.
+    """
+
+    fq_primme_gpu_basis_set_reserve_(gib)
 
 
 cdef void c_precond_gpu(

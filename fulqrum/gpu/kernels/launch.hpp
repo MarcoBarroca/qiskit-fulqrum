@@ -26,6 +26,15 @@ extern "C"
                            const FqDiagonalTables* tables,
                            void* stream);
 
+    int fq_launch_diagonal_shifted_inverse(const FqTileGeometry* geometry,
+                                           const FqDiagonalTables* tables,
+                                           const double* x,
+                                           double* y,
+                                           long long offset,
+                                           long long count,
+                                           double shift,
+                                           void* stream);
+
     int fq_launch_alpha_singles_pair(const FqTileGeometry* geometry,
                                      const FqVectors* vectors,
                                      const FqAlphaSinglePairTables* tables,

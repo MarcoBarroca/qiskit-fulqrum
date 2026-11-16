@@ -281,6 +281,10 @@ cdef extern from "../kernels/formats/params.hpp":
 cdef extern from "../kernels/launch.hpp":
     int fq_launch_diagonal(const FqTileGeometry* geometry, const FqVectors* vectors,
                            const FqDiagonalTables* tables, void* stream) nogil
+    int fq_launch_diagonal_shifted_inverse(const FqTileGeometry* geometry,
+                                           const FqDiagonalTables* tables, const double* x,
+                                           double* y, long long offset, long long count,
+                                           double shift, void* stream) nogil
     int fq_launch_alpha_singles_pair(const FqTileGeometry* geometry, const FqVectors* vectors,
                                      const FqAlphaSinglePairTables* tables, void* stream) nogil
     int fq_launch_alpha_singles_delta(const FqTileGeometry* geometry, const FqVectors* vectors,
@@ -417,6 +421,31 @@ def launch_diagonal(tuple geometry, uintptr_t src_in, uintptr_t out_local, uintp
         status = fq_launch_diagonal(&tile, &vectors, &tables, <void*> stream)
     if status:
         raise _launch_error("diagonal kernel launch", status)
+
+
+def launch_diagonal_shifted_inverse(tuple geometry, uintptr_t diag_local, uintptr_t diag_alpha,
+                                    uintptr_t diag_beta, uintptr_t diag_Mb, uintptr_t alpha_strings,
+                                    int num_alpha, uintptr_t x, uintptr_t y, long long offset,
+                                    long long count, double shift, uintptr_t stream):
+    """y = x / (d - shift) on local elements offset .. offset + count (clamped Jacobi)."""
+
+    cdef FqTileGeometry tile = _geometry(geometry)
+    cdef FqDiagonalTables tables
+    memset(&tables, 0, sizeof(tables))
+    tables.diag_local = <const double*> diag_local
+    tables.diag_alpha = <const double*> diag_alpha
+    tables.diag_beta = <const double*> diag_beta
+    tables.diag_Mb = <const double*> diag_Mb
+    tables.alpha_strings = <const uint64_t*> alpha_strings
+    tables.num_alpha = num_alpha
+    tables.reserved = 0
+    cdef int status
+    with nogil:
+        status = fq_launch_diagonal_shifted_inverse(
+            &tile, &tables, <const double*> x, <double*> y, offset, count, shift, <void*> stream
+        )
+    if status:
+        raise _launch_error("diagonal shifted-inverse kernel launch", status)
 
 
 def launch_alpha_singles_pair(tuple geometry, uintptr_t src_in, uintptr_t out_local, uintptr_t alpha_slot,

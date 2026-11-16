@@ -1205,6 +1205,69 @@ class TileGPUResidentHamiltonian(LinearOperator):
             )
         return self._diag_local_host_cache
 
+    @property
+    def diag_local_device(self):
+        """Return this rank's Hamiltonian diagonal as a CuPy ``float64`` vector.
+
+        Passing it as ``precond_diag_local`` to ``distributed_primme_eigsh``
+        avoids a host vector, and on the GPU path also a second device copy.
+        """
+        if not self._cupy_available or self._d_alpha_uniq is None:
+            raise RuntimeError(
+                "diag_local_device needs CuPy and the uploaded operator tables"
+            )
+        import cupy  # noqa: PLC0415
+
+        if self._d_diag_local is not None:
+            return self._d_diag_local.reshape(-1)
+        shape = (self._n_b_local, self._n_a_local)
+        ones = cupy.ones(shape, dtype=cupy.float64)
+        out = cupy.zeros(shape, dtype=cupy.float64)
+        self._launch_diagonal(ones, out)
+        cupy.cuda.runtime.deviceSynchronize()
+        del ones
+        return out.reshape(-1)
+
+    @property
+    def diag_local_factored(self):
+        """Return this rank's diagonal in factored form, or ``None``.
+
+        Available when the operator recomputes its diagonal in the matvec
+        (see ``FQ_DIAG_RECOMPUTE``) instead of storing it. The returned
+        ``FactoredDiagonal`` has the values of ``diag_local`` but stores no
+        vector of length ``n_local``.
+        """
+        if self._d_diag_Mb is None or self._d_alpha_uniq is None:
+            return None
+        if self._d_alpha_uniq.ndim != 1:
+            return None
+        from .factored_diagonal import FactoredDiagonal  # noqa: PLC0415
+
+        geometry = (
+            self._a0,
+            self._n_a_local,
+            self._b0,
+            self._n_b_local,
+            self._a0,
+            self._n_a_local,
+            self._b0,
+            self._n_b_local,
+            0,
+            self._n_a_local,
+            0,
+            self._n_b_local,
+            int(self._n_a_local),
+            int(self._threads_per_block),
+        )
+        tables = (
+            _device_address(self._d_diag_local),
+            _device_address(self._d_diag_alpha),
+            _device_address(self._d_diag_beta),
+            _device_address(self._d_diag_Mb),
+            single_word_strings(self._d_alpha_uniq, "diagonal"),
+        )
+        return FactoredDiagonal(self, geometry, tables, self._num_alpha)
+
     def _host_diag_local(self, spmv, num_alpha: int) -> np.ndarray:
 
         if int(self._has_diag):

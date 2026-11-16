@@ -122,9 +122,21 @@ def distributed_primme_eigsh(
             largest magnitude.
         method: PRIMME preset name; defaults to ``"PRIMME_GD_Olsen_plusK"``.
         conv: ``"abs"`` (default), ``"rel"``, ``"norm"`` or ``"energy"``.
-        precond_diag_local: Optional real host diagonal of shape ``(H.n_local,)``
-            in the operator's local row order, for a shifted Jacobi preconditioner.
-            ``None`` disables this preconditioner; ``H.diag_local`` can supply it.
+        precond_diag_local: Diagonal for a shifted Jacobi preconditioner, in the
+            operator's local row order (length ``H.n_local``). ``None`` disables
+            the preconditioner. Three forms are accepted; the last two save a
+            vector of length ``n_local`` each, which matters when memory limits
+            the subspace size:
+
+            - NumPy array, such as ``H.diag_local``: held on the host. Also, copied
+              to the GPU on the GPU path.
+            - CuPy array on the GPU, such as ``H.diag_local_device``:
+              used as is, with no host copy and no extra device copy.
+            - Factored diagonal, such as ``H.diag_local_factored``: recomputes
+              each diagonal element when the preconditioner is applied, so no
+              diagonal vector is stored on host or GPU. Any object with a
+              ``size`` attribute and an
+              ``apply_shifted_inverse(x, y, shift, offset=0)`` method works.
         v0_local: Optional real host starting vector, shape ``(H.n_local,)``, or
             block, shape ``(H.n_local, m)``. Converted to Fortran-order float64;
             at most ``k`` columns are used. ``None`` supplies no starting vectors.
@@ -285,6 +297,7 @@ class SolverCallbacks:
     pinned_basis: bool = False
     primme_comm: object = None
     spec_matvec: bool = False
+    managed_basis: bool = False
 
 
 def _check_operator(H):
@@ -305,7 +318,24 @@ def _check_operator(H):
 def _local_inputs(H, precond_diag_local, v0_local):
 
     n_local = int(H.n_local)
-    if precond_diag_local is not None:
+    if _is_factored(precond_diag_local):
+        if int(precond_diag_local.size) != n_local:
+            raise ValueError(
+                "precond_diag_local must have size "
+                f"{n_local}, got {int(precond_diag_local.size)}"
+            )
+    elif _is_device_array(precond_diag_local):
+        import cupy  # noqa: PLC0415
+
+        precond_diag_local = cupy.ascontiguousarray(
+            precond_diag_local, dtype=cupy.float64
+        ).reshape(-1)
+        if precond_diag_local.shape != (n_local,):
+            raise ValueError(
+                "precond_diag_local must have shape "
+                f"({n_local},), got {precond_diag_local.shape}"
+            )
+    elif precond_diag_local is not None:
         precond_diag_local = np.asarray(precond_diag_local, dtype=np.float64)
         if precond_diag_local.shape != (n_local,):
             raise ValueError(
@@ -321,6 +351,21 @@ def _local_inputs(H, precond_diag_local, v0_local):
                 f"v0_local must have {n_local} local rows, got {v0_local.shape}"
             )
     return precond_diag_local, v0_local
+
+
+def _is_device_array(x) -> bool:
+
+    return x is not None and hasattr(x, "__cuda_array_interface__")
+
+
+def _is_factored(x) -> bool:
+
+    return x is not None and hasattr(x, "apply_shifted_inverse")
+
+
+def _on_gpu(x) -> bool:
+
+    return _is_device_array(x) or _is_factored(x)
 
 
 def choose_leg(H, gpu, backend) -> bool:
@@ -363,6 +408,10 @@ def _finish_callbacks(use_gpu, H, callbacks) -> SolverCallbacks:
 
     if not use_gpu:
         _host_leg_collective(H, callbacks)
+    elif callbacks.managed_basis:
+        _abort_on_rank_error(_warmup_managed_basis, H._comm, "warm-up matvec")(
+            H, callbacks.gpu_matvec
+        )
     callbacks.gpu_matvec = _abort_on_rank_error(callbacks.gpu_matvec, H._comm, "matvec")
     callbacks.gpu_precond = _abort_on_rank_error(
         callbacks.gpu_precond, H._comm, "preconditioner"
@@ -388,26 +437,35 @@ def _gpu_leg_callbacks(
     )
     if v0_local is not None:
         callbacks.gpu_init_size = min(int(options.k), int(v0_local.shape[1]))
-        callbacks.gpu_evecs[:, : callbacks.gpu_init_size] = cupy.asarray(
-            v0_local[:, : callbacks.gpu_init_size]
-        )
+        _copy_to_device_columns(v0_local, callbacks.gpu_evecs, callbacks.gpu_init_size)
     if precond_diag_local is not None:
         callbacks.gpu_precond = _make_gpu_precond(precond_diag_local, n_local)
     callbacks.gpu_matvec = _make_gpu_block_matvec(H, n_local, stage=managed_basis)
+    callbacks.managed_basis = managed_basis
+    # The managed basis budget is measured from free device memory: give back
+    # blocks that the setup left in the pool.
+    cupy.get_default_memory_pool().free_all_blocks()
     return callbacks
+
+
+_HOST_COPY_ROWS = 1 << 22
+
+
+def _copy_to_device_columns(host, device, columns: int):
+    """Copy the first columns of a host block to a device block."""
+    n = int(host.shape[0])
+    buf = np.empty(min(n, _HOST_COPY_ROWS), dtype=np.float64)
+    for j in range(int(columns)):
+        for r0 in range(0, n, buf.size):
+            m = min(buf.size, n - r0)
+            buf[:m] = host[r0 : r0 + m, j]
+            device[r0 : r0 + m, j].set(buf[:m])
 
 
 def _check_gpu_basis_fits(n_local: int, ncv: int, managed_basis: bool):
 
     import cupy  # noqa: PLC0415
 
-    _int32_max = 2**31 - 1
-    if n_local > _int32_max:
-        raise ValueError(
-            f"GPU PRIMME path: n_local = {n_local:,} exceeds INT32_MAX "
-            f"({_int32_max:,}). Use more ranks (lower per-rank n_local) or "
-            "pass gpu=False."
-        )
     _free, _total = cupy.cuda.runtime.memGetInfo()
     _need = 2 * n_local * ncv * 8
     if _need > 0.95 * _free and not managed_basis:
@@ -429,7 +487,15 @@ def _host_leg_callbacks(H, n_local, precond_diag_local, v0_local) -> SolverCallb
 def _host_leg_local(H, n_local, precond_diag_local, v0_local) -> SolverCallbacks:
 
     callbacks = SolverCallbacks(precond_diag_local, v0_local)
-    if precond_diag_local is not None and config.read("FQ_PRIMME_GPU_PRECOND"):
+    if _on_gpu(precond_diag_local):
+        # A device diagonal: the GPU applies the preconditioner to the host
+        # vectors, so the host keeps no copy of the diagonal.
+        _pc_tile = int(config.read("FQ_PRIMME_GPU_PRECOND_TILE"))
+        callbacks.gpu_precond = _make_host_gpu_precond(
+            precond_diag_local, n_local, _pc_tile
+        )
+        callbacks.precond_diag_local = None
+    elif precond_diag_local is not None and config.read("FQ_PRIMME_GPU_PRECOND"):
         import cupy  # noqa: PLC0415
 
         cupy.get_default_memory_pool().free_all_blocks()
@@ -633,7 +699,30 @@ def _make_gpu_block_matvec(H, n_local: int, stage: bool = False):
                 H._matvec(x_j, out=y_j)
         cupy.cuda.runtime.deviceSynchronize()
 
+    _block_matvec.staging = (d_x, d_y)
     return _block_matvec
+
+
+# Device memory kept free by the managed basis after the warm-up matvec, in GiB.
+_WARMUP_RESERVE_GIB = 4.0
+
+
+def _warmup_managed_basis(H, matvec):
+    """Run one matvec before PRIMME allocates a managed basis.
+
+    The operator allocates some buffers in its first matvec. After this one,
+    free device memory is close to its steady-state value, so the eigen basis
+    can take all of it (but a small reserve) instead of staying partly in host
+    memory. Every rank calls it.
+    """
+    import cupy  # noqa: PLC0415
+
+    d_x, d_y = matvec.staging
+    d_x.fill(0.0)
+    H._matvec(d_x, out=d_y)
+    cupy.cuda.runtime.deviceSynchronize()
+    cupy.get_default_memory_pool().free_all_blocks()
+    _load_backend().managed_basis_set_reserve(_WARMUP_RESERVE_GIB)
 
 
 class _HostDirectMatvec:
@@ -837,7 +926,16 @@ def _make_host_gpu_precond(precond_diag_local, n_local: int, tile_rows: int):
 
     n = int(n_local)
     T = max(1, min(int(tile_rows), n if n > 0 else 1))
-    diag_host = np.ascontiguousarray(np.asarray(precond_diag_local, dtype=np.float64))
+    factored = precond_diag_local if _is_factored(precond_diag_local) else None
+    on_device = factored is not None or _is_device_array(precond_diag_local)
+    if on_device:
+        diag_host = None
+        d_diag = precond_diag_local
+    else:
+        d_diag = None
+        diag_host = np.ascontiguousarray(
+            np.asarray(precond_diag_local, dtype=np.float64)
+        )
     fused = _clamped_jacobi_kernel()
 
     def _coherent(ptr, count):
@@ -851,7 +949,7 @@ def _make_host_gpu_precond(precond_diag_local, n_local: int, tile_rows: int):
 
     def _block_precond(x_ptr, ldx, y_ptr, ldy, block_size, shifts):
 
-        diag_ptr = int(diag_host.ctypes.data)
+        diag_ptr = 0 if on_device else int(diag_host.ctypes.data)
         for j in range(block_size):
             xj = int(x_ptr) + 8 * int(ldx) * j
             yj = int(y_ptr) + 8 * int(ldy) * j
@@ -860,7 +958,13 @@ def _make_host_gpu_precond(precond_diag_local, n_local: int, tile_rows: int):
                 m = min(T, n - off)
                 d_x = _coherent(xj + 8 * off, m)
                 d_y = _coherent(yj + 8 * off, m)
-                d_d = _coherent(diag_ptr + 8 * off, m)
+                if factored is not None:
+                    factored.apply_shifted_inverse(d_x, d_y, s, offset=off)
+                    continue
+                if on_device:
+                    d_d = d_diag[off : off + m]
+                else:
+                    d_d = _coherent(diag_ptr + 8 * off, m)
                 fused(d_x, d_d, s, d_y)
         cupy.cuda.runtime.deviceSynchronize()
 
@@ -872,7 +976,13 @@ def _make_gpu_precond(precond_diag_local, n_local: int):
     import cupy  # noqa: PLC0415
 
     _wrap = _device_vector_wrapper(n_local)
-    d_diag = cupy.asarray(np.asarray(precond_diag_local, dtype=np.float64))
+    factored = precond_diag_local if _is_factored(precond_diag_local) else None
+    if factored is not None:
+        d_diag = None
+    elif _is_device_array(precond_diag_local):
+        d_diag = precond_diag_local
+    else:
+        d_diag = cupy.asarray(np.asarray(precond_diag_local, dtype=np.float64))
     fused = _clamped_jacobi_kernel()
 
     def _block_precond(x_ptr, ldx, y_ptr, ldy, block_size, shifts):
@@ -880,7 +990,10 @@ def _make_gpu_precond(precond_diag_local, n_local: int):
         for j in range(block_size):
             d_x = _wrap(int(x_ptr) + 8 * int(ldx) * j)
             d_y = _wrap(int(y_ptr) + 8 * int(ldy) * j)
-            fused(d_x, d_diag, float(shifts[j]), d_y)
+            if factored is not None:
+                factored.apply_shifted_inverse(d_x, d_y, float(shifts[j]))
+            else:
+                fused(d_x, d_diag, float(shifts[j]), d_y)
         cupy.cuda.runtime.deviceSynchronize()
 
     return _block_precond
