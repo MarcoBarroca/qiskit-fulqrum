@@ -17,6 +17,7 @@
 #include <boost/sort/pdqsort/pdqsort.hpp>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <numeric>
@@ -375,6 +376,56 @@ inline void ladder_int_starts(const std::vector<OperatorTerm>& terms,
     }
 }
 
+inline void check_ladder_bins(const std::vector<OperatorTerm>& terms,
+                              const std::size_t* group_ptrs,
+                              const std::size_t num_groups,
+                              const std::size_t* ladder_ptrs,
+                              const std::size_t num_ladder_ptrs,
+                              const std::size_t ladder_offset)
+{
+    const std::string fix =
+        " Sort the terms with group_term_sort_by_ladder_int and rebuild the bins.";
+
+    if(ladder_offset == 0 || (ladder_offset & (ladder_offset - 1)) != 0 ||
+       num_ladder_ptrs != num_groups * ladder_offset + 1 ||
+       ladder_ptrs[num_groups * ladder_offset] != terms.size())
+    {
+        throw std::invalid_argument(
+            "The ladder bins do not have the size of the operator's groups and terms." + fix);
+    }
+
+    const width_t ladder_width = static_cast<width_t>(__builtin_ctzll(ladder_offset));
+
+    for(std::size_t group = 0; group < num_groups; group++)
+    {
+        if(group_ptrs[group] > group_ptrs[group + 1] || group_ptrs[group + 1] > terms.size() ||
+           ladder_ptrs[(group + 1) * ladder_offset] != group_ptrs[group + 1] ||
+           ladder_ptrs[group * ladder_offset] != group_ptrs[group])
+        {
+            throw std::invalid_argument("The ladder bins do not start at the operator's groups." +
+                                        fix);
+        }
+
+        for(std::size_t bin = 0; bin < ladder_offset; bin++)
+        {
+            const std::size_t first = ladder_ptrs[group * ladder_offset + bin];
+            const std::size_t last = ladder_ptrs[group * ladder_offset + bin + 1];
+            if(first > last || last > group_ptrs[group + 1])
+                throw std::invalid_argument(
+                    "The ladder bins are not ordered within the operator's groups." + fix);
+
+            for(std::size_t term = first; term < last; term++)
+            {
+                if(term >= terms.size() || term_ladder_int(terms[term], ladder_width) != bin)
+                {
+                    throw std::invalid_argument("A term is not in the bin of its ladder integer." +
+                                                fix);
+                }
+            }
+        }
+    }
+}
+
 /** @struct QubitOperator
  * @brief Data structure for each a qubit operator, i.e. a collection of 'words'
  *
@@ -715,9 +766,9 @@ typedef struct QubitOperator
     *
     * @return Vector of real-phases for terms
     */
-    std::vector<int> real_phases() const
+    std::vector<int8_t> real_phases() const
     {
-        std::vector<int> out;
+        std::vector<int8_t> out;
         out.reserve(this->size());
         for(const auto& t : terms)
             out.push_back(t.real_phase);

@@ -18,6 +18,9 @@ from libcpp cimport bool
 from ..core.bitset cimport bitset_t
 from ..core.bitset_hashmap cimport BitsetHashMapWrapper
 from ..core.constants cimport width_t
+import numpy as np
+cimport numpy as np 
+
 
 cdef extern from "../src/base.hpp":
     # Packing functions
@@ -34,7 +37,7 @@ cdef extern from "../src/base.hpp":
         vector[width_t] proj_indices
         vector[width_t] proj_bits
         width_t offdiag_weight
-        char real_phase
+        np.int8_t real_phase
         int group
         unsigned int offdiag_structure
         unsigned int proj_structure
@@ -73,7 +76,7 @@ cdef extern from "../src/base.hpp":
         QubitOperator_t remove_constant_terms()
         pair[QubitOperator_t, QubitOperator_t] split_diagonal()
         QubitOperator_t terms_by_group(int)
-        vector[int] real_phases()
+        vector[np.int8_t] real_phases()
         vector[complex] coefficients()
         vector[int] extended_terms()
         vector[width_t] ladder_integers()
@@ -85,8 +88,24 @@ cdef extern from "../src/base.hpp":
 
     ctypedef struct Subspace_t:
         BitsetHashMapWrapper bitstrings
-        unsigned int num_qubits
+        width_t num_qubits
         size_t size
+        width_t alpha_width
+        bool product
+        bool map_materialized
+        size_t map_build_count
+        vector[size_t] full_keys
+        void configure(int, bool) except +
+        void initialize_full(const vector[string]&) except +
+        void initialize_product(const vector[string]&, const vector[string]&) except +
+        bitset_t key_at(size_t) except +
+        void load_key(size_t, bitset_t&) except +
+        void ensure_hashmap() except +
+        void prepare_mutation() except +
+        void copy_to(Subspace_t&) except +
+        string half_string(int, size_t) except +
+        size_t half_word(int, size_t) except +
+        size_t half_size(int) except +
 
 
     ctypedef struct FermionicTerm_t:
@@ -126,3 +145,8 @@ cdef extern from "../src/base.hpp":
     OperatorTerm_t& set_proj_indices(OperatorTerm_t&)
     void set_offdiag_weight_phase_struct(OperatorTerm_t& term) nogil
     void set_extended_flag(OperatorTerm_t& term) nogil
+
+
+cdef extern from "../src/qubit_oper.hpp":
+    void check_ladder_bins(const vector[OperatorTerm_t]& terms, const size_t* group_ptrs, size_t num_groups,
+                           const size_t* ladder_ptrs, size_t num_ladder_ptrs, size_t ladder_offset) except +

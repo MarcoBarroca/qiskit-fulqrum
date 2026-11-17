@@ -242,7 +242,8 @@ cdef class QubitOperator():
         """
         if self.size() == 0:
             return 0
-        self.oper.group_sort()
+        if not self.oper.sorted:
+            self.oper.group_sort()
         return self.oper.group_ptrs().size() - 1
 
     @property
@@ -293,9 +294,9 @@ cdef class QubitOperator():
         Returns:
             ndarray: real phase of each term in operator
         """
-        cdef vector[int] phases = self.oper.real_phases()
-        cdef int[::1] out = np.empty(self.oper.terms.size(), dtype=np.int32)
-        memcpy(&out[0], &phases[0], phases.size()*sizeof(int))
+        cdef vector[np.int8_t] phases = self.oper.real_phases()
+        cdef np.int8_t[::1] out = np.empty(self.oper.terms.size(), dtype=np.int8)
+        memcpy(&out[0], &phases[0], phases.size()*sizeof(np.int8_t))
         return np.asarray(out)
 
     @cython.boundscheck(False)
