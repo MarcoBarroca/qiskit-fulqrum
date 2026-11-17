@@ -128,7 +128,7 @@ def test_max_num_qubits():
 
     assert S
 
-    bitstrings = [["0" * (2**13+1), "1" * (2**13+1)]]
+    bitstrings = [["0" * (2**13 + 1), "1" * (2**13 + 1)]]
 
     with pytest.raises(ValueError):
         S = Subspace(bitstrings)
