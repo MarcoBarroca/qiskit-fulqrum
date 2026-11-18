@@ -17,7 +17,8 @@ import numpy as np
 import scipy.sparse.linalg as spla
 import primme
 
-from fulqrum import FermionicOperator, Subspace, SubspaceHamiltonian, TimedMatvec
+import fulqrum as fq
+from fulqrum import FermionicOperator, Subspace, SubspaceHamiltonian
 
 _path = Path(__file__).parent / "data/h2o.json"
 FOP = FermionicOperator.from_json(_path)
@@ -181,7 +182,7 @@ def test_full_dist_h20_eigenenergy_matrix_free_timed_scipy():
     S = Subspace([list(full_dist.keys())])
     Hsub = SubspaceHamiltonian(NEW_OP, S)
 
-    H_timed = TimedMatvec(Hsub, verbose=False)
+    H_timed = fq.linear_operator.TimedMatvec(Hsub, verbose=False)
 
     evals, _ = spla.eigsh(H_timed, k=1, which="SA", v0=np.ones(len(S), dtype=float))
     assert np.allclose(evals, GROUND_ENERGY, 1e-12)
@@ -198,7 +199,7 @@ def test_full_dist_h20_eigenenergy_matrix_free_timed_primme():
     S = Subspace([list(full_dist.keys())])
     Hsub = SubspaceHamiltonian(NEW_OP, S)
 
-    H_timed = TimedMatvec(Hsub, verbose=False)
+    H_timed = fq.linear_operator.TimedMatvec(Hsub, verbose=False)
 
     evals, _ = primme.eigsh(
         H_timed, k=1, which="SA", v0=np.ones((len(S), 1), dtype=float)
