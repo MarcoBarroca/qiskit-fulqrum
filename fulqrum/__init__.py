@@ -21,6 +21,7 @@ from .core import (
     SubspaceHamiltonian,
     FermionicOperator,
     Bitset,
+    TimedMatvec,
 )
 
 import fulqrum.core.constants as constants
