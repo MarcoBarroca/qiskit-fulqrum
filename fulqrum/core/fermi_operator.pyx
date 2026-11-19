@@ -89,7 +89,10 @@ cdef class FermionicOperator():
                                 term.offdiag_structure += (inds[kk] + 1) * (val > 2)
                         term.coeff = coeff
                 else:
-                    term.coeff = 1
+                    if len(item) < 3:
+                        term.coeff = 1
+                    else:
+                        term.coeff = item[2]
                 term.insertion_sort()
                 self.oper.terms.push_back(term)
 

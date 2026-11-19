@@ -138,3 +138,9 @@ def test_fermioperator_from_label():
     fop1 = FermionicOperator.from_label(5, "+:0 1:2 -:3", -5 + 3j)
     fop2 = FermionicOperator(5, [("+1-", (0, 2, 3), -5 + 3j)])
     assert fop1.operators == fop2.operators
+
+
+def test_empty_fermiop_gets_correct_coeff():
+    """Coeff for an empty fermiop still gets applied"""
+    fop = FermionicOperator(5, [("", [], 0.0)])
+    assert fop.coeff == 0.0
