@@ -38,6 +38,7 @@ include "includes/base_header.pxi"
 include "includes/converters.pxi"
 include "includes/io.pxi"
 
+from fulqrum.core.constants cimport MAX_WIDTH
 
 
 cdef const FermionicTerm_t EmptyFermionicTerm
@@ -59,6 +60,8 @@ cdef class FermionicOperator():
     """
     def __cinit__(self, unsigned int width,
                   object operators=None):
+        if width < 1 or width > MAX_WIDTH:
+            raise FulqrumError(f"Operator width is out of bounds: [1, {MAX_WIDTH}]")
         self.oper.width = width
         cdef object item
         cdef FermionicTerm_t term

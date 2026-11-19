@@ -12,8 +12,11 @@
 # pylint: disable=no-name-in-module
 """Test basic core functionality"""
 
+import pytest
 import numpy as np
 from fulqrum import FermionicOperator
+from fulqrum.exceptions import FulqrumError
+from fulqrum.core.constants import MAX_QUBITS
 
 
 def test_empty_fermioperator():
@@ -122,3 +125,9 @@ def test_fermionoperator_copy():
     assert fop2[0].operators == fop1[0].operators
     assert fop2[1].operators == fop1[1].operators
     assert np.allclose(fop2.coefficients(), fop1.coefficients())
+
+
+def test_fermionoperator_max_width():
+    """Validate that max width is obeyed and throws if over"""
+    with pytest.raises(FulqrumError):
+        FermionicOperator(MAX_QUBITS + 1)
