@@ -131,3 +131,10 @@ def test_fermionoperator_max_width():
     """Validate that max width is obeyed and throws if over"""
     with pytest.raises(FulqrumError):
         FermionicOperator(MAX_QUBITS + 1)
+
+
+def test_fermioperator_from_label():
+    """Test Fermi from label construction"""
+    fop1 = FermionicOperator.from_label(5, "+:0 1:2 -:3", -5 + 3j)
+    fop2 = FermionicOperator(5, [("+1-", (0, 2, 3), -5 + 3j)])
+    assert fop1.operators == fop2.operators

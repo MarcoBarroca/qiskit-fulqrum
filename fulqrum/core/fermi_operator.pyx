@@ -229,7 +229,33 @@ cdef class FermionicOperator():
             raise FulqrumError(f"Cannot get operator terms using {type(key)}")
         return out
 
+    @classmethod
+    def from_label(self, size_t width, str label="", double complex coeff = 1.0):
+        """Create FermionicOperator from a string label
 
+        Parameters:
+            width (int): Width of operator
+            label (str): Label of operator
+            coeff (complex): Complex coefficient, default=1.0
+
+        Returns:
+            FermionicOperator
+        """
+        cdef FermionicTerm_t term = EmptyFermionicTerm
+        cdef FermionicOperator out = FermionicOperator(width)
+        cdef list items = label.split(' ')
+        cdef list temp
+        if any(items):
+            for item in items:
+                temp = item.split(':')
+                ind = <unsigned int>int(temp[1])
+                val = STR_TO_IND[(<string>temp[0]).c_str()[0]]
+                term.data.push_back(pack_indval(ind, val))
+        term.coeff = coeff
+        term.insertion_sort()
+        out.oper.terms.push_back(term)
+        return out
+    
     def size(self):
         """Return the number of terms in the operator
 
