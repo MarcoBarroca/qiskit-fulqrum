@@ -146,7 +146,7 @@ def load_tutorials(app):
         warnings.warn("Copy tutorials failed.", RuntimeWarning)
 
 def load_examples(app):
-    dest_dir = os.path.join(app.srcdir, "examples")
+    dest_dir = os.path.join(app.srcdir, "_examples")
     source_dir = os.path.dirname(app.srcdir) + "/examples"
 
     try:
@@ -159,7 +159,7 @@ def clean_tutorials(app, exc):
     shutil.rmtree(tutorials_dir)
 
 def clean_examples(app, exc):
-    examples_dir = os.path.join(app.srcdir, "examples")
+    examples_dir = os.path.join(app.srcdir, "_examples")
     shutil.rmtree(examples_dir)
 
 

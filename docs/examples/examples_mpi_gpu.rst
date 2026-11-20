@@ -8,6 +8,6 @@ This is a copy of the Python script that can be found in the "examples" folder o
 the Fulqrum parent directory.
 
 
-.. literalinclude:: examples/gpu/run_fulqrum_gpu_diagonalization.py
+.. literalinclude:: ../_examples/gpu/run_fulqrum_gpu_diagonalization.py
    :language: python
    :linenos:

@@ -59,7 +59,7 @@ As shown below, a typical eigenvalue problem is broken up into three pieces: 1) 
     :glob:
 
     tutorials/*
-    examples_mpi_gpu.rst
+    examples/examples_mpi_gpu.rst
 
 
 .. toctree::
