@@ -62,27 +62,20 @@ def s_squared_fermionic_op(num_orbitals):
     return s_minus @ s_plus + s_z @ s_z + s_z
 
 
-def s_squared_qubit_op(num_orbitals):
-    """Build S^2 operator."""
-    op = s_squared_fermionic_op(num_orbitals).extended_jw_transformation()
-    op.set_type(1)
-    return op
+def s_squared_qubit_op(num_orbitals, operator_type=2):
+    """Build the `S^2` qubit operator on ``2 * num_orbitals`` modes.
 
+    Parameters:
+        num_orbitals (int): Number of spatial orbitals ``N``.
+        operator_type (int): Fulqrum operator type, 1 or 2. Both give the same
+            matrix on a subspace; the GPU operators need type 2 (the default).
 
-def assert_s2_type1(s2_qubit_op):
-    r"""Guard: reject a `S^2` qubit operator that is not ``type=1``.
-
-    Type-2 path uses a special logic. S^2 may not satisfy those. So, we set
-    S^2 to be type-1 to be safer.
+    Returns:
+        QubitOperator: `S^2` after the extended Jordan-Wigner transformation.
     """
-    op_type = getattr(s2_qubit_op, "type", None)
-    if op_type != 1:
-        raise ValueError(
-            "S^2 qubit operator must be type=1; got type="
-            f"{op_type}. Build S^2 with "
-            "s_squared_qubit_op(...) (type-1 by default) or call "
-            "s2_qop.set_type(1)."
-        )
+    op = s_squared_fermionic_op(num_orbitals).extended_jw_transformation()
+    op.set_type(operator_type)
+    return op
 
 
 def make_spin_penalized_fermionic_op(
