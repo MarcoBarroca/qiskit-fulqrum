@@ -77,8 +77,13 @@ def chain_integrals(n_atoms):
         verbose=0,
     )
     mf = (scf.ROHF if n_atoms % 2 else scf.RHF)(mol).run()
-    h1 = mf.mo_coeff.T @ mf.get_hcore() @ mf.mo_coeff
-    h2 = ao2mo.restore(1, ao2mo.kernel(mol, mf.mo_coeff), mol.nao)
+    # The sign of each orbital is arbitrary and can differ between processes;
+    # fix it, so that every MPI rank builds the same Hamiltonian.
+    coeff = mf.mo_coeff
+    first = np.argmax(np.abs(coeff) > 1e-6, axis=0)
+    coeff = coeff * np.sign(coeff[first, np.arange(coeff.shape[1])])
+    h1 = coeff.T @ mf.get_hcore() @ coeff
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, coeff), mol.nao)
     return np.ascontiguousarray(h1), np.ascontiguousarray(h2)
 
 
@@ -244,3 +249,62 @@ def test_gpu_spin_penalty_eigenpairs_match_pyscf(n_atoms, nelec, workers):
     s2 = float(vector @ (s2_sub @ vector))
     assert abs(s2 - ss) < 1e-6
     assert abs(s2 - s2_pyscf) < 1e-6
+
+
+@pytest.mark.mpi
+@pytest.mark.gpu
+@pytest.mark.parametrize("n_atoms,nelec", [(6, (3, 3)), (5, (3, 2)), (6, (4, 2))])
+def test_mpi_spin_penalty_matches_cpu_and_pyscf(n_atoms, nelec):
+    """One GPU per MPI rank (``mpirun -n 2`` or more): matvec and eigenpair of H + lambda S^2."""
+    MPI = pytest.importorskip("mpi4py.MPI")
+    cupy = pytest.importorskip("cupy")
+    comm = MPI.COMM_WORLD
+    if comm.Get_size() < 2:
+        pytest.skip("needs at least 2 MPI ranks; run under mpirun")
+    from pyscf import fci
+
+    from fulqrum.gpu import DistributedMPIGPUHamiltonian, distributed_primme_eigsh
+    from fulqrum.gpu.distributed import _collective
+    from fulqrum.test.conftest import assemble_tiles
+
+    _collective.reset_for_testing()
+    local_rank = comm.Split_type(MPI.COMM_TYPE_SHARED).Get_rank()
+    device = local_rank % cupy.cuda.runtime.getDeviceCount()
+    cupy.cuda.Device(device).use()
+    hsub, alpha, beta = penalised_hamiltonian(n_atoms, nelec)
+    ham = DistributedMPIGPUHamiltonian(hsub, comm=comm, gpu_ids=(device,))
+    pairs = n_atoms * (n_atoms - 1) // 2
+    assert ham.construction_timing.get("spin_flip_pairs") == pairs
+
+    x = np.random.RandomState(11).uniform(-1.0, 1.0, hsub.shape[0])
+    tile = x.reshape(ham._n_b, ham._n_a)[ham._b0 : ham._b1, ham._a0 : ham._a1]
+    local = np.asarray(ham._matvec(np.ascontiguousarray(tile).ravel()))
+    pieces = comm.allgather(((ham._a0, ham._a1, ham._b0, ham._b1), local))
+    result = assemble_tiles(pieces, len(alpha), len(beta))
+    expected = hsub @ x
+    assert np.linalg.norm(result - expected) / np.linalg.norm(expected) < 1e-12
+
+    spin = 0.5 * (nelec[0] - nelec[1])
+    ss = spin * (spin + 1)
+    h1, h2 = chain_integrals(n_atoms)
+    solver = fci.addons.fix_spin_(fci.direct_spin1.FCI(), shift=LAMBDA, ss=ss)
+    solver.conv_tol = 1e-12
+    e_pyscf, _ = solver.kernel(h1, h2, n_atoms, nelec)
+    diag = np.asarray(ham.diag_local)
+    lowest = comm.allreduce(float(diag.min()) if diag.size else np.inf, op=MPI.MIN)
+    v0 = np.zeros(diag.size)
+    if diag.size and diag.min() == lowest:
+        v0[int(diag.argmin())] = 1.0
+    values, _ = distributed_primme_eigsh(
+        ham,
+        k=1,
+        tol=1e-9,
+        which="SA",
+        precond_diag_local=diag,
+        v0_local=v0,
+        energy_tol=1e-13,
+        gpu=True,
+    )
+    # PySCF's linear penalty is lambda (S^2 - ss); the operator here is H + lambda S^2.
+    assert abs(float(np.asarray(values)[0]) - LAMBDA * ss - e_pyscf) < 1e-8
+    comm.Barrier()
