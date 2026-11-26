@@ -27,8 +27,12 @@ eigensolving in Fulqrum:
   for the quadratic case, so no operator squaring is needed). Both
   ``SubspaceHamiltonian`` and
   its ``to_csr_linearoperator_fast()`` CSR form work.
-* `make_spin_penalized_csr` returns an explicit ``scipy.sparse`` CSR matrix.
-    Avoid using it for now.
+* `make_spin_penalized_csr` returns an explicit ``scipy.sparse`` CSR matrix;
+  in the quadratic case it squares the `S^2` matrix.
+
+``target_s=None`` (the default) targets the lowest spin of the electron
+sector, ``|num_a - num_b| / 2``. `spin_penalty_expectations` gives `<S^2>`
+and `<H>` of a penalized eigenvector.
 """
 
 import numpy as np
@@ -83,7 +87,7 @@ def make_spin_penalized_fermionic_op(
     num_orbitals,
     num_a,
     num_b,
-    target_s,
+    target_s=None,
     lam=0.2,
 ):
     """Build a spin-penalized Hamiltonian as a single `FermionicOperator`.
@@ -93,12 +97,15 @@ def make_spin_penalized_fermionic_op(
         num_orbitals (int): Number of spatial orbitals ``N``.
         num_a (int): Number of spin-up (alpha) electrons.
         num_b (int): Number of spin-down (beta) electrons.
-        target_s (float): Target total spin quantum number ``s``.
+        target_s (float or None): Target total spin quantum number ``s``. ``None``
+            (default) targets the lowest spin of the sector,
+            ``s = |num_a - num_b| / 2``, which uses the linear penalty.
         lam (float): Penalty weight `lambda`. Defaults to ``0.2``.
 
     Returns:
         FermionicOperator: ``hamiltonian + lam * P(S^2)``.
     """
+    target_s = _target_spin(num_a, num_b, target_s)
     num_qubits = 2 * num_orbitals
     s2 = s_squared_fermionic_op(num_orbitals)
     ss = target_s * (target_s + 1.0)
@@ -133,7 +140,7 @@ def make_spin_penalized_operator(
     s2_operator,
     num_a,
     num_b,
-    target_s,
+    target_s=None,
     lam=0.2,
 ):
     r"""Compose a spin-penalized Hamiltonian as a ``LinearOperator``.
@@ -146,7 +153,8 @@ def make_spin_penalized_operator(
         s2_operator: Projected `S^2` operator on the same subspace.
         num_a (int): Number of spin-up (alpha) electrons.
         num_b (int): Number of spin-down (beta) electrons.
-        target_s (float): Target total spin quantum number ``s`` (e.g. ``0`` for a
+        target_s (float or None): Target total spin quantum number ``s``; ``None``
+            (default) is the lowest spin of the sector (e.g. ``0`` for a
             singlet, ``0.5`` doublet, ``1`` triplet).
         lam (float): Penalty weight. Defaults to ``0.2`` (the
             value used in arXiv:2411.04827; PySCF's ``fix_spin_`` uses 0.1-0.2).
@@ -155,6 +163,7 @@ def make_spin_penalized_operator(
     Returns:
         scipy.sparse.linalg.LinearOperator: The spin-penalized operator.
     """
+    target_s = _target_spin(num_a, num_b, target_s)
     if h_operator.shape != s2_operator.shape:
         raise ValueError(
             "h_operator and s2_operator must act on the same subspace; got shapes "
@@ -189,10 +198,32 @@ def make_spin_penalized_csr(
     s2_csr,
     num_a,
     num_b,
-    target_s,
+    target_s=None,
     lam=0.2,
 ):
-    """Avoid using it for now"""
+    """Build a spin-penalized Hamiltonian as an explicit CSR matrix.
+
+    The explicit form of `make_spin_penalized_operator`: ``H + lam * (S^2 - ss)``
+    (linear) or ``H + lam * (S^2 - ss)^2`` (quadratic), on the subspace of both
+    matrices. The quadratic form squares the `S^2` matrix, which can fill in
+    many more entries than `S^2` itself; the matrix-free
+    `make_spin_penalized_operator` avoids that.
+
+    Parameters:
+        h_csr: Projected Hamiltonian, a ``scipy.sparse`` matrix or a Fulqrum
+            ``CSRLinearOperator`` (``SubspaceHamiltonian.to_csr_linearoperator()``).
+        s2_csr: Projected `S^2` on the same subspace, in the same form.
+        num_a (int): Number of spin-up (alpha) electrons.
+        num_b (int): Number of spin-down (beta) electrons.
+        target_s (float or None): Target total spin quantum number ``s``. ``None``
+            (default) targets the lowest spin of the sector,
+            ``s = |num_a - num_b| / 2``, which uses the linear penalty.
+        lam (float): Penalty weight `lambda`. Defaults to ``0.2``.
+
+    Returns:
+        scipy.sparse.csr_matrix: The penalized matrix.
+    """
+    target_s = _target_spin(num_a, num_b, target_s)
     # Accept either a raw scipy sparse matrix or a Fulqrum CSRLinearOperator.
     h_mat = h_csr.matrix if hasattr(h_csr, "matrix") else h_csr
     s2_mat = s2_csr.matrix if hasattr(s2_csr, "matrix") else s2_csr
@@ -210,3 +241,51 @@ def make_spin_penalized_csr(
     penalty = dev @ dev if quadratic else dev
 
     return (sp.csr_matrix(h_mat) + lam * penalty).tocsr()
+
+
+def _target_spin(num_a, num_b, target_s):
+    """The target spin: the given one, or the lowest spin of the sector."""
+    return abs(num_a - num_b) * 0.5 if target_s is None else target_s
+
+
+def spin_penalty_expectations(
+    eigenvalue,
+    vector,
+    subspace,
+    num_a,
+    num_b,
+    target_s=None,
+    lam=0.2,
+):
+    r"""`<S^2>` and `<H>` of an eigenvector of a spin-penalized Hamiltonian.
+
+    The eigenvalue of ``H + lam * P`` (``P`` the linear or quadratic penalty, as
+    in `make_spin_penalized_fermionic_op`) is not the energy; this returns
+    `<S^2>` and `<H> = eigenvalue - lam * <P>` of the eigenvector.
+
+    Parameters:
+        eigenvalue (float): Eigenvalue of the penalized operator for ``vector``.
+        vector (ndarray): The eigenvector, in the order of ``subspace``.
+        subspace (Subspace): The alpha x beta subspace of the calculation.
+        num_a (int): Number of spin-up (alpha) electrons.
+        num_b (int): Number of spin-down (beta) electrons.
+        target_s (float or None): Target spin; ``None`` is the lowest spin of the sector.
+        lam (float): Penalty weight `lambda`. Defaults to ``0.2``.
+
+    Returns:
+        dict: ``{"s2": <S^2>, "energy": <H>}``.
+    """
+    from ..core.linear_operator import SubspaceHamiltonian
+
+    target_s = _target_spin(num_a, num_b, target_s)
+    ss = target_s * (target_s + 1.0)
+    s2 = SubspaceHamiltonian(s_squared_qubit_op(subspace.width // 2), subspace)
+    v = np.asarray(vector).ravel()
+    norm = np.vdot(v, v).real
+    dev = np.asarray(s2.matvec(v)).ravel() - ss * v
+    s2_value = np.vdot(v, dev).real / norm + ss
+    if use_quadratic_penalty(num_a, num_b, target_s):
+        penalty = np.vdot(dev, dev).real / norm
+    else:
+        penalty = s2_value - ss
+    return {"s2": float(s2_value), "energy": float(eigenvalue - lam * penalty)}

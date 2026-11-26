@@ -24,6 +24,7 @@ from fulqrum.utils import (
     make_spin_penalized_operator,
     s_squared_fermionic_op,
     s_squared_qubit_op,
+    spin_penalty_expectations,
     split_alpha_beta,
     use_quadratic_penalty,
 )
@@ -100,8 +101,11 @@ def test_operator_products_set_the_derived_term_fields():
     rebuilt = fq.FermionicOperator(
         d["width"], [(vals, inds, complex(*c)) for vals, inds, c in d["terms"]]
     )
-    for name in ("offdiag_structures", "proj_structures", "weights"):
+    # offdiag_structure drives term grouping; the Python constructor sets it (but not
+    # the projector fields, which the C++ string constructor and multiply also set).
+    for name in ("offdiag_structures", "weights"):
         np.testing.assert_array_equal(getattr(s2, name)(), getattr(rebuilt, name)())
+    assert np.count_nonzero(s2.offdiag_structures()) > 0
 
 
 @pytest.mark.parametrize("coeff", [0.0, -0.0])
@@ -110,16 +114,17 @@ def test_zero_identity_terms_keep_their_coefficient(coeff):
     assert op.to_dict()["terms"] == [["", [], (0.0, 0.0)]]
 
 
+@pytest.mark.parametrize("lam", [0.1, 0.2])
 @pytest.mark.parametrize("op_type", [1, 2])
 @pytest.mark.parametrize(
     "n_atoms,nelec,target_s",
     [(4, (2, 2), 0.0), (5, (3, 2), 0.5), (4, (3, 1), 1.0), (6, (4, 2), 1.0)],
 )
-def test_linear_penalty_matches_pyscf(n_atoms, nelec, target_s, op_type):
+def test_linear_penalty_matches_pyscf(n_atoms, nelec, target_s, op_type, lam):
     assert not use_quadratic_penalty(nelec[0], nelec[1], target_s)
     ss = target_s * (target_s + 1)
     h1, h2 = chain(n_atoms)
-    solver = fci.addons.fix_spin_(fci.direct_spin1.FCI(), shift=LAMBDA, ss=ss)
+    solver = fci.addons.fix_spin_(fci.direct_spin1.FCI(), shift=lam, ss=ss)
     solver.conv_tol = 1e-12
     e_ref, c_ref = solver.kernel(h1, h2, n_atoms, nelec)
     penalised = make_spin_penalized_fermionic_op(
@@ -128,7 +133,7 @@ def test_linear_penalty_matches_pyscf(n_atoms, nelec, target_s, op_type):
         nelec[0],
         nelec[1],
         target_s,
-        LAMBDA,
+        lam,
     )
     w, v = np.linalg.eigh(dense(qubit(penalised, op_type), n_atoms, nelec))
     assert abs(w[0] - e_ref) < 1e-10
@@ -199,3 +204,81 @@ def test_half_strings_start_from_hartree_fock(pool_by_weight):
         # halves stay on the side they appeared on (alpha = right, beta = left)
         assert set(alpha) == {"0011", "1100"}
         assert set(beta) == {"0011", "0101"}
+
+
+def explicit_s_squared(norb):
+    """S^2 term by term (any S_z), independent of the operator-product builder."""
+    n = norb
+    terms = []
+    for i in range(n):
+        terms.append(("1", [i + n], 1.0))
+        terms.append(("11", [i, i + n], -1.0))
+        for j in range(n):
+            if i != j:
+                terms.append(("++--", [i + n, j, i, j + n], -1.0))
+        terms.append(("1", [i], 0.5))
+        terms.append(("1", [i + n], -0.5))
+    for i in range(n):
+        for j in range(n):
+            for p, sp in ((i, 1.0), (i + n, -1.0)):
+                for q, sq in ((j, 1.0), (j + n, -1.0)):
+                    vals, inds = ("1", [p]) if p == q else ("11", [p, q])
+                    terms.append((vals, inds, 0.25 * sp * sq))
+    return fq.FermionicOperator(2 * n, terms)
+
+
+@pytest.mark.parametrize("lam", [0.1, 0.2])
+@pytest.mark.parametrize(
+    "n_atoms,nelec", [(4, (2, 2)), (5, (3, 2)), (4, (3, 1)), (6, (4, 2))]
+)
+def test_default_target_is_the_lowest_spin_and_matches_a_hand_built_penalty(
+    n_atoms, nelec, lam
+):
+    spin = 0.5 * (nelec[0] - nelec[1])
+    h_op = integrals_to_fq_fermionic_op(*chain(n_atoms))
+    default = make_spin_penalized_fermionic_op(h_op, n_atoms, *nelec, lam=lam)
+    explicit = make_spin_penalized_fermionic_op(h_op, n_atoms, *nelec, spin, lam)
+    by_hand = (
+        h_op
+        + explicit_s_squared(n_atoms) * lam
+        + fq.FermionicOperator(2 * n_atoms, [("", [], -lam * spin * (spin + 1))])
+    )
+    expected = dense(qubit(by_hand, 2), n_atoms, nelec)
+    for op in (default, explicit):
+        np.testing.assert_allclose(
+            dense(qubit(op, 2), n_atoms, nelec), expected, rtol=0, atol=1e-12
+        )
+
+
+@pytest.mark.parametrize(
+    "n_atoms,nelec,target_s",
+    [(4, (2, 2), None), (5, (3, 2), None), (6, (4, 2), None), (4, (2, 2), 1.0)],
+)
+def test_expectations_give_the_energy_and_spin(n_atoms, nelec, target_s):
+    h1, h2 = chain(n_atoms)
+    h_op = integrals_to_fq_fermionic_op(h1, h2)
+    spin = 0.5 * (nelec[0] - nelec[1]) if target_s is None else target_s
+    penalised = make_spin_penalized_fermionic_op(
+        h_op, n_atoms, *nelec, target_s, LAMBDA
+    )
+    w, v = np.linalg.eigh(dense(qubit(penalised, 2), n_atoms, nelec))
+    subspace = fq.Subspace(
+        [sector_strings(n_atoms, nelec[0]), sector_strings(n_atoms, nelec[1])]
+    )
+    out = spin_penalty_expectations(w[0], v[:, 0], subspace, *nelec, target_s, LAMBDA)
+    h_dense = dense(qubit(h_op, 2), n_atoms, nelec)
+    assert abs(out["s2"] - spin * (spin + 1)) < 1e-8
+    assert abs(out["energy"] - v[:, 0] @ h_dense @ v[:, 0]) < 1e-10
+    if target_s is None:
+        solver = fci.addons.fix_spin_(
+            fci.direct_spin1.FCI(), shift=LAMBDA, ss=spin * (spin + 1)
+        )
+        solver.conv_tol = 1e-12
+        e_ref, c_ref = solver.kernel(h1, h2, n_atoms, nelec)
+        assert abs(out["s2"] - spin_op.spin_square(c_ref, n_atoms, nelec)[0]) < 1e-8
+        # linear: e = <H> at an exact spin state
+        assert abs(out["energy"] - e_ref) < 1e-10
+    else:
+        # quadratic, triplet at S_z = 0: the energy is the lowest S_z = 1 energy
+        triplet = np.linalg.eigvalsh(dense(qubit(h_op, 2), n_atoms, (3, 1)))[0]
+        assert abs(out["energy"] - triplet) < 1e-10
