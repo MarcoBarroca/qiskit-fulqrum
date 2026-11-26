@@ -166,6 +166,31 @@ typedef struct FermionicTerm
         }
         coeff *= prefactor;
     }
+    /**
+     * Operator product of two terms: (this) followed by (other).
+     *
+     * @param[in] other The right-hand term.
+     * @return The product term, normal-ordered.
+     */
+    FermionicTerm multiply(const FermionicTerm& other) const
+    {
+        FermionicTerm out = FermionicTerm(this->coeff * other.coeff);
+        out.data.reserve(this->data.size() + other.data.size());
+        out.data.assign(this->data.begin(), this->data.end());
+        out.data.insert(out.data.end(), other.data.begin(), other.data.end());
+        out.insertion_sort();
+        // Set the derived fields as the string constructor does; grouping and the
+        // type-2 tables read them.
+        for(const width_t packed : out.data)
+        {
+            const auto [ind, val] = unpack_indval(packed);
+            const bool is_offdiag = (val > 2);
+            out.offdiag_weight += static_cast<width_t>(is_offdiag);
+            out.offdiag_structure += (ind + 1) * static_cast<unsigned int>(is_offdiag);
+        }
+        set_term_proj_indices_fermi(out);
+        return out;
+    }
 } FermionicTerm_t;
 
 /**

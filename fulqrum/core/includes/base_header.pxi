@@ -128,6 +128,7 @@ cdef extern from "../src/base.hpp":
         FermionicOperator_t copy()
         FermionicOperator_t from_json(string) except +
         FermionicOperator_t& combine_repeat_indices() nogil
+        FermionicOperator_t multiply(FermionicOperator_t) except +
         FermionicOperator_t weight_sort() nogil
         FermionicOperator_t offdiag_structure_sort() nogil
         FermionicOperator_t& combine_repeat_terms(double)
