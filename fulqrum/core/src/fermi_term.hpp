@@ -183,6 +183,15 @@ typedef struct FermionicTerm
         out.values.insert(out.values.end(), other.values.begin(), other.values.end());
         out.indices.insert(out.indices.end(), other.indices.begin(), other.indices.end());
         out.insertion_sort();
+        // Set the derived fields as the string constructor does; grouping and the
+        // type-2 tables read them.
+        for(std::size_t i = 0; i < out.values.size(); ++i)
+        {
+            const bool is_offdiag = (out.values[i] > 2);
+            out.offdiag_weight += static_cast<width_t>(is_offdiag);
+            out.offdiag_structure += (out.indices[i] + 1) * static_cast<unsigned int>(is_offdiag);
+        }
+        set_term_proj_indices(out);
         return out;
     }
 } FermionicTerm_t;
