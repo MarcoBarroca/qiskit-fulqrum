@@ -34,7 +34,6 @@ Spin operators
    s_minus_fermionic_op
    s_squared_fermionic_op
    s_squared_qubit_op
-   assert_s2_type1
    use_quadratic_penalty
    make_spin_penalized_fermionic_op
    make_spin_penalized_operator
@@ -59,7 +58,6 @@ from .spin_operators import (
     s_minus_fermionic_op,
     s_squared_fermionic_op,
     s_squared_qubit_op,
-    assert_s2_type1,
     use_quadratic_penalty,
     make_spin_penalized_fermionic_op,
     make_spin_penalized_operator,
@@ -78,7 +76,6 @@ __all__ = [
     "s_minus_fermionic_op",
     "s_squared_fermionic_op",
     "s_squared_qubit_op",
-    "assert_s2_type1",
     "use_quadratic_penalty",
     "make_spin_penalized_fermionic_op",
     "make_spin_penalized_operator",
