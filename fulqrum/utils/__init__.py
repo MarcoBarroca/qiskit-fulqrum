@@ -38,6 +38,7 @@ Spin operators
    make_spin_penalized_fermionic_op
    make_spin_penalized_operator
    make_spin_penalized_csr
+   spin_penalty_expectations
 
 SQD helpers
 -----------
@@ -62,6 +63,7 @@ from .spin_operators import (
     make_spin_penalized_fermionic_op,
     make_spin_penalized_operator,
     make_spin_penalized_csr,
+    spin_penalty_expectations,
 )
 
 from .sqd_helpers import split_alpha_beta, build_spin_separated_half_strings
@@ -80,6 +82,7 @@ __all__ = [
     "make_spin_penalized_fermionic_op",
     "make_spin_penalized_operator",
     "make_spin_penalized_csr",
+    "spin_penalty_expectations",
     "split_alpha_beta",
     "build_spin_separated_half_strings",
 ]
